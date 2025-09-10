@@ -46,112 +46,125 @@ def parse_sabvoton_packet(packet_bytes):
 def parse_hex_file(filename):
     """Parse a text file containing hex data."""
     try:
-        with open(filename, 'r') as file:
-            for line_num, line in enumerate(file, 1):
-                line = line.strip()
-                if not line or line.startswith('#'):  # Skip empty lines and comments
+        # Try to open as text first
+        try:
+            with open(filename, 'r', encoding='utf-8') as file:
+                content = file.read()
+        except UnicodeDecodeError:
+            # If UTF-8 fails, try reading as binary and convert to hex
+            with open(filename, 'rb') as file:
+                binary_data = file.read()
+                content = binary_data.hex()
+        
+        # Process the content...
+        lines = content.split('\n')
+        for line_num, line in enumerate(lines, 1):
+            line = line.strip()
+            if not line or line.startswith('#'):  # Skip empty lines and comments
+                continue
+            
+            # Remove any whitespace and convert to bytes
+            hex_string = ''.join(line.split())
+
+            # split by 18F88006, not sure if this will be accurate every time
+            all_signals = hex_string.split("18F88006")
+
+            # compares each whole signal to previous signal
+            prev_signal = ""
+            for signal_num, signal in enumerate(all_signals, 1):
+                different_than_previous = len(prev_signal) > 0 and signal != prev_signal
+                diff_signifier = " <===" if different_than_previous else " "
+                print(f"{signal_num:3d} | ", signal, diff_signifier)
+                prev_signal = signal
+
+            all_signals_by_packets = {}
+            # create excel file
+            import openpyxl
+            from openpyxl.styles import PatternFill
+            
+            # Create a new workbook and select the active sheet
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Packet Data"
+            
+            # Create green fill for highlighting changed packets
+            green_fill = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")
+            
+            # Add headers
+            headers = ["Signal #"] + [f"Packet {i}" for i in range(14)]  # 0-13 packets
+            for col, header in enumerate(headers, 1):
+                ws.cell(row=1, column=col, value=header)
+            
+            current_excel_row = 2  # Start data from row 2
+            
+            for signal_num, signal in enumerate(all_signals, 1):
+                # split by 2 chars at a time
+                packets = []
+                prev_sig_num = signal_num - 1
+                if len(signal) == 0:
                     continue
-                
-                # Remove any whitespace and convert to bytes
-                hex_string = ''.join(line.split())
+                # start new row in excel
+                for i in range(0, len(signal), 2):
+                    packets.append(signal[i:i+2])
 
-                # split by 18F88006, not sure if this will be accurate every time
-                all_signals = hex_string.split("18F88006")
+                for p in range(0, len(packets)):
+                    current_packet_val = packets[p]
+                    prev_packet_val = None
+                    if prev_sig_num in all_signals_by_packets.keys() and len(all_signals_by_packets[prev_sig_num]) > p:
+                        # Extract just the 2-character packet from the 4-character string
+                        prev_packet_val = all_signals_by_packets[prev_sig_num][p][0:2]
+                    
+                    if str(current_packet_val) == str(prev_packet_val):
+                        # add packet to excel file
+                        packets[p] = (f"{current_packet_val}  ")
+                        # Add to Excel without highlighting
+                        ws.cell(row=current_excel_row, column=p+2, value=current_packet_val)
+                    else:
+                        # add packet to excel file, but highlight it green
+                        packets[p] = (f"{current_packet_val}* ")
+                        # Add to Excel with green highlighting
+                        cell = ws.cell(row=current_excel_row, column=p+2, value=current_packet_val)
+                        cell.fill = green_fill
 
-                # compares each whole signal to previous signal
-                prev_signal = ""
-                for signal_num, signal in enumerate(all_signals, 1):
-                    different_than_previous = len(prev_signal) > 0 and signal != prev_signal
-                    diff_signifier = " <===" if different_than_previous else " "
-                    print(f"{signal_num:3d} | ", signal, diff_signifier)
-                    prev_signal = signal
+                all_signals_by_packets[signal_num] = packets
+                # Add signal number to Excel
+                ws.cell(row=current_excel_row, column=1, value=signal_num)
+                current_excel_row += 1
+                print(f"{signal_num:3d} | ", "".join(packets))
 
-                all_signals_by_packets = {}
-                # create excel file
-                import openpyxl
-                from openpyxl.styles import PatternFill
-                
-                # Create a new workbook and select the active sheet
-                wb = openpyxl.Workbook()
-                ws = wb.active
-                ws.title = "Packet Data"
-                
-                # Create green fill for highlighting changed packets
-                green_fill = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")
-                
-                # Add headers
-                headers = ["Signal #"] + [f"Packet {i}" for i in range(14)]  # 0-13 packets
-                for col, header in enumerate(headers, 1):
-                    ws.cell(row=1, column=col, value=header)
-                
-                current_excel_row = 2  # Start data from row 2
-                
-                for signal_num, signal in enumerate(all_signals, 1):
-                    # split by 2 chars at a time
-                    packets = []
-                    prev_sig_num = signal_num - 1
-                    if len(signal) == 0:
-                        continue
-                    # start new row in excel
-                    for i in range(0, len(signal), 2):
-                        packets.append(signal[i:i+2])
+            # Save the Excel file
+            import os
+            base_name = os.path.splitext(filename)[0]  # Remove any extension
+            excel_filename = f"{base_name}_packets.xlsx"
+            wb.save(excel_filename)
+            print(f"\nExcel file saved as: {excel_filename}")
 
-                    for p in range(0, len(packets)):
-                        current_packet_val = packets[p]
-                        prev_packet_val = None
-                        if prev_sig_num in all_signals_by_packets.keys() and len(all_signals_by_packets[prev_sig_num]) > p:
-                            # Extract just the 2-character packet from the 4-character string
-                            prev_packet_val = all_signals_by_packets[prev_sig_num][p][0:2]
+            print(f"Found {len(all_signals)} complete signals")
+            
+            # for packet_num, packet_hex in enumerate(packets, 1):
+            #     try:
+            #         # Convert hex string to bytes
+            #         if packet_num == 15:
+            #             break;
+            #         print("packet_num", packet_num)
+            #         print("packet_hex", packet_hex)
+            #         packet_bytes = bytes.fromhex(packet_hex)
                         
-                        if str(current_packet_val) == str(prev_packet_val):
-                            # add packet to excel file
-                            packets[p] = (f"{current_packet_val}  ")
-                            # Add to Excel without highlighting
-                            ws.cell(row=current_excel_row, column=p+2, value=current_packet_val)
-                        else:
-                            # add packet to excel file, but highlight it green
-                            packets[p] = (f"{current_packet_val}* ")
-                            # Add to Excel with green highlighting
-                            cell = ws.cell(row=current_excel_row, column=p+2, value=current_packet_val)
-                            cell.fill = green_fill
-
-                    all_signals_by_packets[signal_num] = packets
-                    # Add signal number to Excel
-                    ws.cell(row=current_excel_row, column=1, value=signal_num)
-                    current_excel_row += 1
-                    print(f"{signal_num:3d} | ", "".join(packets))
-
-                # Save the Excel file
-                excel_filename = filename.replace('.txt', '_packets.xlsx')
-                wb.save(excel_filename)
-                print(f"\nExcel file saved as: {excel_filename}")
-
-                print(f"Found {len(all_signals)} complete signals")
-                
-                # for packet_num, packet_hex in enumerate(packets, 1):
-                #     try:
-                #         # Convert hex string to bytes
-                #         if packet_num == 15:
-                #             break;
-                #         print("packet_num", packet_num)
-                #         print("packet_hex", packet_hex)
-                #         packet_bytes = bytes.fromhex(packet_hex)
+            #         # Extract the 8-byte payload (skip the 4-byte CAN ID)
+            #         can_id_bytes = packet_bytes[:4]
+            #         payload_bytes = packet_bytes[4:]
                         
-                #         # Extract the 8-byte payload (skip the 4-byte CAN ID)
-                #         can_id_bytes = packet_bytes[:4]
-                #         payload_bytes = packet_bytes[4:]
+            #         print(f"\nPacket {packet_num}:")
+            #         print(f"  CAN ID: {can_id_bytes.hex().upper()}")
+            #         print(f"  Payload: {payload_bytes.hex().upper()}")
                         
-                #         print(f"\nPacket {packet_num}:")
-                #         print(f"  CAN ID: {can_id_bytes.hex().upper()}")
-                #         print(f"  Payload: {payload_bytes.hex().upper()}")
+            #         # Parse the payload using the existing function
+            #         decoded_data = parse_sabvoton_packet(packet_bytes)
+            #         if decoded_data:
+            #             print(f"  Parsed: {decoded_data}")
                         
-                #         # Parse the payload using the existing function
-                #         decoded_data = parse_sabvoton_packet(packet_bytes)
-                #         if decoded_data:
-                #             print(f"  Parsed: {decoded_data}")
-                        
-                #     except ValueError as e:
-                #         print(f"Packet {packet_num}: Invalid hex format - {e}")
+            #     except ValueError as e:
+            #         print(f"Packet {packet_num}: Invalid hex format - {e}")
                         
     except FileNotFoundError:
         print(f"Error: File '{filename}' not found.")
